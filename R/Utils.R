@@ -29,11 +29,14 @@ selectExponent <- function(
     resub_error <- list()
     for (exponent in exponents) {
         weights_lasso <- 1 / (moderated_test)^(exponent)
+
+        family_type <- if (nlevels(lasso_y) > 2) "multinomial" else "binomial"
+
         if (!is.null(sample.weights)) {
             model <- glmnet::cv.glmnet(
                 x = as.matrix(lasso_x),
                 y = lasso_y,
-                family = "binomial",
+                family = family_type,
                 weights = sample.weights,
                 penalty.factor = weights_lasso,
                 alpha = 1,
@@ -43,7 +46,7 @@ selectExponent <- function(
             model <- glmnet::cv.glmnet(
                 x = as.matrix(lasso_x),
                 y = lasso_y,
-                family = "binomial",
+                family = family_type,
                 penalty.factor = weights_lasso,
                 alpha = 1,
                 parallel = parallel
