@@ -45,7 +45,8 @@ model.
 }
 \description{
 The main function of the TOP package. This function returns a
-glmnet model .
+glmnet model. Multinomial outcomes are fitted using the multinomial family in
+glmnet.
 }
 \examples{
 data(TOP_data_binary, package = "TOP")

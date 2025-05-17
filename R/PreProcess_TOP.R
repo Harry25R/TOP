@@ -12,7 +12,8 @@
 #' @return A vector of feature names.
 #' @details contrast must be a character vector of length 1. If contrast is
 #'   NULL, the first level of the first factor in y_list will be used as the
-#'   reference level.
+#'   reference level. When the outcome has more than two levels an F-test is
+#'   performed for each feature.
 #' @examples
 #' data(TOP_data_binary, package = "TOP")
 #' x1 <- TOP_data_binary$x1
@@ -66,14 +67,25 @@ filterFeatures <- function(
         # the levels of y_list
         colnames(des) <- levels(y_list[[i]])
 
-        # Run limma
+        # Run limma and extract test statistics
         fit <- limma::lmFit(x_list[[i]], design = des)
-        CM <- limma::makeContrasts(contrasts = contrast, levels = des)
-        fit2 <- limma::contrasts.fit(fit, CM)
-        efit <- limma::eBayes(fit2, robust = TRUE)
-        tT[[i]] <- limma::topTable(efit, coef = contrast, n = Inf) |>
-            dplyr::select(t) |>
-            data.frame()
+
+        if (nlevels(y_list[[i]]) > 2) {
+            # Use an F-test when there are more than two outcome levels
+            efit <- limma::eBayes(fit, robust = TRUE)
+            tT[[i]] <- limma::topTable(
+                efit, number = Inf, sort.by = "F"
+            ) |>
+                dplyr::select(F) |>
+                data.frame()
+        } else {
+            CM <- limma::makeContrasts(contrasts = contrast, levels = des)
+            fit2 <- limma::contrasts.fit(fit, CM)
+            efit <- limma::eBayes(fit2, robust = TRUE)
+            tT[[i]] <- limma::topTable(efit, coef = contrast, n = Inf) |>
+                dplyr::select(t) |>
+                data.frame()
+        }
 
         # Add a column with the gene names
         tT[[i]]$gene <- rownames(tT[[i]])

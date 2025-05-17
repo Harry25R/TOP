@@ -1,6 +1,7 @@
 #' @title TOP_model
 #' @description The main function of the TOP package. This function returns a
-#'   glmnet model .
+#'   glmnet model. Multinomial outcomes are fitted using the multinomial
+#'   family in glmnet.
 #' @param x_list a list of data frames, each containing the data for a single
 #'   batch or dataset. Columns should be features and rows should be
 #'   observations.
@@ -173,13 +174,16 @@ TOP_model <- function(
         weights_lasso <- 1 / (moderated_test)^(1 / 2)
     }
 
+    # Determine glmnet family based on outcome levels
+    lasso_family <- if (nlevels(lasso_y) > 2) "multinomial" else "binomial"
+
     # Lasso model for all datasets with updated weights
     if (!is.null(dataset_weights)) {
         message("Fitting final lasso model")
         model <- glmnet::cv.glmnet(
             x = as.matrix(lasso_x),
             y = lasso_y,
-            family = "binomial",
+            family = lasso_family,
             weights = sample.weights,
             penalty.factor = weights_lasso,
             alpha = 1,
@@ -190,7 +194,7 @@ TOP_model <- function(
         model <- glmnet::cv.glmnet(
             x = as.matrix(lasso_x),
             y = lasso_y,
-            family = "binomial",
+            family = lasso_family,
             penalty.factor = weights_lasso,
             alpha = 1,
             parallel = parallel

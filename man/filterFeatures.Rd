@@ -36,7 +36,8 @@ a list of data frames with corresponding labels.
 \details{
 contrast must be a character vector of length 1. If contrast is
 NULL, the first level of the first factor in y_list will be used as the
-reference level.
+reference level. When more than two outcome levels are present an F-test
+is performed for each feature.
 }
 \examples{
 data(TOP_data_binary, package = "TOP")
