@@ -130,3 +130,33 @@ extractAUC <- function(roc_list) {
 expit <- function(x) {
     return(1 / (1 + exp(-x)))
 }
+
+#' @title Select lambda by metric
+#' @description Choose an optimal lambda from a cv.glmnet object using sensitivity or specificity.
+#' @param cvfit A fitted cv.glmnet object produced with keep=TRUE.
+#' @param y The response vector used to fit the model.
+#' @param metric Metric to optimise, either "sensitivity" or "specificity".
+#' @param threshold Classification threshold for predicted probabilities. Default 0.5.
+#' @return The lambda value with the highest metric.
+#' @noRd
+select_lambda_metric <- function(cvfit, y, metric = c("sensitivity", "specificity"),
+                                threshold = 0.5) {
+    metric <- match.arg(metric)
+    preds <- cvfit$fit.preval
+    lambdas <- cvfit$lambda
+    scores <- numeric(length(lambdas))
+    for (i in seq_along(lambdas)) {
+        pred_prob <- preds[, i]
+        pred_class <- ifelse(pred_prob > threshold, levels(y)[2], levels(y)[1])
+        cm <- table(factor(pred_class, levels = levels(y)), y)
+        tp <- cm[2, 2]
+        tn <- cm[1, 1]
+        fp <- cm[2, 1]
+        fn <- cm[1, 2]
+        sens <- tp / (tp + fn)
+        spec <- tn / (tn + fp)
+        scores[i] <- if (metric == "sensitivity") sens else spec
+    }
+    best_idx <- which.max(scores)
+    return(lambdas[best_idx])
+}

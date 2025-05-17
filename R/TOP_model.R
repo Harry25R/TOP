@@ -12,6 +12,7 @@
 #'   included in the model, Default: NULL
 #' @param dataset_weights a list of data frames that refer to any grouping
 #'   structure in the batches, Default: NULL
+#' @param metric Metric used to select lambda. Options are "deviance", "sensitivity" or "specificity". Default: "deviance"
 #' @param sample_weights Should each batch we weighted equally? This is
 #'   important in unequal sample sizes, Default: FALSE
 #' @param optimiseExponent Should the exponent used to modufy the lasso weights
@@ -47,8 +48,8 @@
 #' @importFrom doParallel registerDoParallel
 TOP_model <- function(
     x_list, y_list, covariates = NULL, dataset_weights = NULL,
+    metric = c("deviance","sensitivity","specificity"),
     sample_weights = FALSE, optimiseExponent = FALSE, nCores = 1) {
-    # Catching some errors.
     # y must be a factor or else it will break.
     if (sum(!unlist(lapply(y_list, is.factor))) > 0) {
         factor_rank <- which(!unlist(lapply(y_list, is.factor)) != FALSE)
@@ -180,7 +181,7 @@ TOP_model <- function(
     # Lasso model for all datasets with updated weights
     if (!is.null(dataset_weights)) {
         message("Fitting final lasso model")
-        model <- glmnet::cv.glmnet(
+        model <- glmnet::cv.glmnet(keep = if(metric!="deviance") TRUE else FALSE, type.measure = if(metric=="deviance") "deviance" else "class",
             x = as.matrix(lasso_x),
             y = lasso_y,
             family = lasso_family,
@@ -191,7 +192,7 @@ TOP_model <- function(
         )
     } else if (is.null(dataset_weights)) {
         message("Fitting final lasso model")
-        model <- glmnet::cv.glmnet(
+        model <- glmnet::cv.glmnet(keep = if(metric!="deviance") TRUE else FALSE, type.measure = if(metric=="deviance") "deviance" else "class",
             x = as.matrix(lasso_x),
             y = lasso_y,
             family = lasso_family,
@@ -199,6 +200,10 @@ TOP_model <- function(
             alpha = 1,
             parallel = parallel
         )
+    }
+    if (metric %in% c("sensitivity", "specificity")) {
+        lambda_opt <- select_lambda_metric(model, lasso_y, metric)
+        model$lambda.min <- lambda_opt
     }
 
     result <- list(
