@@ -41,132 +41,265 @@
 TOP_survival <- function(
     x_list, y_list, nFeatures = 50, dataset_weights = NULL,
     sample_weights = FALSE, nCores = 1) {
-    parallel <- FALSE
-    # register parallel cluster
-    if (nCores > 1) {
-        parallel <- TRUE
-        doParallel::registerDoParallel(nCores)
-    }
-
-    # create a loop to run through all datasets
-    output <- list()
-    for (i in seq_along(x_list)) {
-        # Perform colCoxTests on each dataset
-        output[[i]] <- ClassifyR::colCoxTests(
-            as.matrix(x_list[[i]]), y_list[[i]],
-            option = "fast"
-        )
-    }
-
-    sig.genes <- colCoxTests_combine(output, nFeatures = nFeatures)
-
-    pairwise_coefficients <- list()
-    for (i in seq_along(x_list)) {
-        # subset x_list with the rownames of output
-        x_subset <- x_list[[i]][, sig.genes]
-
-        # Calculate the pairwise_col_diff of z_list_subset
-        z_subset <- pairwise_col_diff(x_subset)
-
-        # Run colCoxTests on z_subset
-        pairwise_coefficients[[i]] <- ClassifyR::colCoxTests(
-            z_subset, y_list[[i]],
-            option = "fast"
-        ) |>
-            dplyr::select(coef) |>
-            data.frame() |>
-            tibble::rownames_to_column(var = "Gene")
-    }
-
-    # Merging pairwise_coefficients
-    coefficients <- pairwise_coefficients |>
-        purrr::reduce(dplyr::left_join, by = "Gene") |>
-        tibble::column_to_rownames(var = "Gene")
-
-    # If there are sample weights.
-    if (sample_weights == TRUE) {
-        freq_samples <- x_list |>
-            vapply(dim, 1L, integer(1L)) |>
-            tibble::enframe() |>
-            dplyr::mutate(freq = value / sum(value)) |>
-            dplyr::mutate(inv_freq = 1 / freq)
-
-        mean_coefficients <- abs(
-            apply(
-                coefficients, 1,
-                function(x) stats::weighted.mean(x, freq_samples$inv_freq)
-            )
-        )
-        sd_coefficients <- sqrt(
-            apply(
-                coefficients, 1,
-                function(x) Hmisc::wtd.var(x, freq_samples$inv_freq)
-            )
-        )
-        fudge <- stats::quantile(
-            sd_coefficients[sd_coefficients != 0], 0.05,
-            na.rm = TRUE
-        )
-    } else if (sample_weights == FALSE) {
-        # Calculate the average & sd of the coefficients across Datasets
-        mean_coefficients <- abs(rowMeans(coefficients))
-        sd_coefficients <- apply(coefficients, 1, sd)
-        fudge <- stats::quantile(
-            sd_coefficients[sd_coefficients != 0], 0.05,
-            na.rm = TRUE
-        )
-    }
-
-    ## If there is some weights supplied
-    if (!is.null(dataset_weights)) {
-        # Sample weights
-        message("Calculating Weights for each Dataset")
-        sample.weights <- unlist(dataset_weights) |>
-            data.frame() |>
-            dplyr::mutate(SampleGroup = as.character(.)) |>
-            dplyr::group_by(SampleGroup) |>
-            dplyr::summarise(n = dplyr::n()) |>
-            dplyr::mutate(freq = n / sum(n))
-        un_weights <- unlist(dataset_weights) |>
-            data.frame() |>
-            dplyr::mutate(
-                SampleGroup = as.character(.),
-                weight = 1
-            )
-        for (i in seq_len(nrow(un_weights))) {
-            idx <- which(
-                un_weights$SampleGroup[i] == sample.weights$SampleGroup
-            )
-            un_weights$weight[i] <- sample.weights$freq[idx]
-        }
-        sample.weights <- un_weights$weight
-    }
-
-    # Calculate the final weights
-    weights <- mean_coefficients / (sd_coefficients + fudge)
-    final_weights <- 1 / (weights)^(1 / 2)
-
-    # Extract the pairwise ratios for significant genes
-    x_list <- lapply(x_list, function(x) x[, sig.genes])
-    z_list <- lapply(x_list, pairwise_col_diff)
-    z_list <- do.call("rbind", z_list)
-
-    # Cleaning the outcome variable
-    survival_y <- do.call("rbind", y_list)
-    Surv_y <- survival::Surv(
-        time = survival_y[, 1], event = survival_y[, 2], type = "right"
+  parallel <- FALSE
+  # register parallel cluster
+  if (nCores > 1) {
+    parallel <- TRUE
+    doParallel::registerDoParallel(nCores)
+  }
+  
+  # create a loop to run through all datasets
+  output <- list()
+  for (i in seq_along(x_list)) {
+    # Perform colCoxTests on each dataset
+    output[[i]] <- ClassifyR::colCoxTests(
+      as.matrix(x_list[[i]]), y_list[[i]],
+      option = "fast"
     )
-
-    # Run a coxnet model with the final_weights as penalty factors
-    coxnet_model <- glmnet::cv.glmnet(
-        x = as.matrix(z_list),
-        y = Surv_y, family = "cox", type.measure = "C",
-        penalty.factor = final_weights,
-        parallel = parallel
+  }
+  
+  sig.genes <- colCoxTests_combine(output, nFeatures = nFeatures)
+  
+  pairwise_coefficients <- list()
+  for (i in seq_along(x_list)) {
+    # subset x_list with the rownames of output
+    x_subset <- x_list[[i]][, sig.genes]
+    
+    # Calculate the pairwise_col_diff of z_list_subset
+    z_subset <- pairwise_col_diff(x_subset)
+    
+    # Run colCoxTests on z_subset
+    pairwise_coefficients[[i]] <- ClassifyR::colCoxTests(
+      z_subset, y_list[[i]],
+      option = "fast"
+    ) |>
+      dplyr::select(coef) |>
+      data.frame() |>
+      tibble::rownames_to_column(var = "Gene")
+  }
+  
+  # Merging pairwise_coefficients
+  coefficients <- pairwise_coefficients |>
+    purrr::reduce(dplyr::left_join, by = "Gene") |>
+    tibble::column_to_rownames(var = "Gene")
+  
+  # If there are sample weights.
+  if (sample_weights == TRUE) {
+    # FIXED: Extract number of rows (samples) from each dataset
+    freq_samples <- sapply(x_list, nrow) |>  # Changed from vapply(x_list, dim, 1L, integer(1L))
+      tibble::enframe() |>
+      dplyr::mutate(freq = value / sum(value)) |>
+      dplyr::mutate(inv_freq = 1 / freq)
+    
+    mean_coefficients <- abs(
+      apply(
+        coefficients, 1,
+        function(x) stats::weighted.mean(x, freq_samples$inv_freq)
+      )
     )
-    coxnet_model <- list(coxnet_model, sig.genes)
+    sd_coefficients <- sqrt(
+      apply(
+        coefficients, 1,
+        function(x) Hmisc::wtd.var(x, freq_samples$inv_freq)
+      )
+    )
+    fudge <- stats::quantile(
+      sd_coefficients[sd_coefficients != 0], 0.05,
+      na.rm = TRUE
+    )
+  } else if (sample_weights == FALSE) {
+    # Calculate the average & sd of the coefficients across Datasets
+    mean_coefficients <- abs(rowMeans(coefficients))
+    sd_coefficients <- apply(coefficients, 1, sd)
+    fudge <- stats::quantile(
+      sd_coefficients[sd_coefficients != 0], 0.05,
+      na.rm = TRUE
+    )
+  }
+  
+  ## If there is some weights supplied
+  if (!is.null(dataset_weights)) {
+    # Sample weights
+    message("Calculating Weights for each Dataset")
+    sample.weights <- unlist(dataset_weights) |>
+      data.frame() |>
+      dplyr::mutate(SampleGroup = as.character(.)) |>
+      dplyr::group_by(SampleGroup) |>
+      dplyr::summarise(n = dplyr::n()) |>
+      dplyr::mutate(freq = n / sum(n))
+    un_weights <- unlist(dataset_weights) |>
+      data.frame() |>
+      dplyr::mutate(
+        SampleGroup = as.character(.),
+        weight = 1
+      )
+    for (i in seq_len(nrow(un_weights))) {
+      idx <- which(
+        un_weights$SampleGroup[i] == sample.weights$SampleGroup
+      )
+      un_weights$weight[i] <- sample.weights$freq[idx]
+    }
+    sample.weights <- un_weights$weight
+  }
+  
+  # Calculate the final weights
+  weights <- mean_coefficients / (sd_coefficients + fudge)
+  final_weights <- 1 / (weights)^(1 / 2)
+  
+  # Extract the pairwise ratios for significant genes
+  x_list <- lapply(x_list, function(x) x[, sig.genes])
+  z_list <- lapply(x_list, pairwise_col_diff)
+  z_list <- do.call("rbind", z_list)
+  
+  # Cleaning the outcome variable
+  survival_y <- do.call("rbind", y_list)
+  Surv_y <- survival::Surv(
+    time = survival_y[, 1], event = survival_y[, 2], type = "right"
+  )
+  
+  # Run a coxnet model with the final_weights as penalty factors
+  coxnet_model <- glmnet::cv.glmnet(
+    x = as.matrix(z_list),
+    y = Surv_y, family = "cox", type.measure = "C",
+    penalty.factor = final_weights,
+    parallel = parallel
+  )
+  coxnet_model <- list(coxnet_model, sig.genes)
+  
+  return(coxnet_model)
+}
 
-    return(coxnet_model)
+# Alternative approach using vapply correctly (if you prefer)
+TOP_survival_alt <- function(
+    x_list, y_list, nFeatures = 50, dataset_weights = NULL,
+    sample_weights = FALSE, nCores = 1) {
+  parallel <- FALSE
+  # register parallel cluster
+  if (nCores > 1) {
+    parallel <- TRUE
+    doParallel::registerDoParallel(nCores)
+  }
+  
+  # create a loop to run through all datasets
+  output <- list()
+  for (i in seq_along(x_list)) {
+    # Perform colCoxTests on each dataset
+    output[[i]] <- ClassifyR::colCoxTests(
+      as.matrix(x_list[[i]]), y_list[[i]],
+      option = "fast"
+    )
+  }
+  
+  sig.genes <- colCoxTests_combine(output, nFeatures = nFeatures)
+  
+  pairwise_coefficients <- list()
+  for (i in seq_along(x_list)) {
+    # subset x_list with the rownames of output
+    x_subset <- x_list[[i]][, sig.genes]
+    
+    # Calculate the pairwise_col_diff of z_list_subset
+    z_subset <- pairwise_col_diff(x_subset)
+    
+    # Run colCoxTests on z_subset
+    pairwise_coefficients[[i]] <- ClassifyR::colCoxTests(
+      z_subset, y_list[[i]],
+      option = "fast"
+    ) |>
+      dplyr::select(coef) |>
+      data.frame() |>
+      tibble::rownames_to_column(var = "Gene")
+  }
+  
+  # Merging pairwise_coefficients
+  coefficients <- pairwise_coefficients |>
+    purrr::reduce(dplyr::left_join, by = "Gene") |>
+    tibble::column_to_rownames(var = "Gene")
+  
+  # If there are sample weights.
+  if (sample_weights == TRUE) {
+    # ALTERNATIVE FIX: Use vapply correctly to extract first dimension (rows)
+    freq_samples <- vapply(x_list, function(x) dim(x)[1], FUN.VALUE = integer(1)) |>
+      tibble::enframe() |>
+      dplyr::mutate(freq = value / sum(value)) |>
+      dplyr::mutate(inv_freq = 1 / freq)
+    
+    mean_coefficients <- abs(
+      apply(
+        coefficients, 1,
+        function(x) stats::weighted.mean(x, freq_samples$inv_freq)
+      )
+    )
+    sd_coefficients <- sqrt(
+      apply(
+        coefficients, 1,
+        function(x) Hmisc::wtd.var(x, freq_samples$inv_freq)
+      )
+    )
+    fudge <- stats::quantile(
+      sd_coefficients[sd_coefficients != 0], 0.05,
+      na.rm = TRUE
+    )
+  } else if (sample_weights == FALSE) {
+    # Calculate the average & sd of the coefficients across Datasets
+    mean_coefficients <- abs(rowMeans(coefficients))
+    sd_coefficients <- apply(coefficients, 1, sd)
+    fudge <- stats::quantile(
+      sd_coefficients[sd_coefficients != 0], 0.05,
+      na.rm = TRUE
+    )
+  }
+  
+  ## If there is some weights supplied
+  if (!is.null(dataset_weights)) {
+    # Sample weights
+    message("Calculating Weights for each Dataset")
+    sample.weights <- unlist(dataset_weights) |>
+      data.frame() |>
+      dplyr::mutate(SampleGroup = as.character(.)) |>
+      dplyr::group_by(SampleGroup) |>
+      dplyr::group_by(SampleGroup) |>
+      dplyr::summarise(n = dplyr::n()) |>
+      dplyr::mutate(freq = n / sum(n))
+    un_weights <- unlist(dataset_weights) |>
+      data.frame() |>
+      dplyr::mutate(
+        SampleGroup = as.character(.),
+        weight = 1
+      )
+    for (i in seq_len(nrow(un_weights))) {
+      idx <- which(
+        un_weights$SampleGroup[i] == sample.weights$SampleGroup
+      )
+      un_weights$weight[i] <- sample.weights$freq[idx]
+    }
+    sample.weights <- un_weights$weight
+  }
+  
+  # Calculate the final weights
+  weights <- mean_coefficients / (sd_coefficients + fudge)
+  final_weights <- 1 / (weights)^(1 / 2)
+  
+  # Extract the pairwise ratios for significant genes
+  x_list <- lapply(x_list, function(x) x[, sig.genes])
+  z_list <- lapply(x_list, pairwise_col_diff)
+  z_list <- do.call("rbind", z_list)
+  
+  # Cleaning the outcome variable
+  survival_y <- do.call("rbind", y_list)
+  Surv_y <- survival::Surv(
+    time = survival_y[, 1], event = survival_y[, 2], type = "right"
+  )
+  
+  # Run a coxnet model with the final_weights as penalty factors
+  coxnet_model <- glmnet::cv.glmnet(
+    x = as.matrix(z_list),
+    y = Surv_y, family = "cox", type.measure = "C",
+    penalty.factor = final_weights,
+    parallel = parallel
+  )
+  coxnet_model <- list(coxnet_model, sig.genes)
+  
+  return(coxnet_model)
 }
 
 
